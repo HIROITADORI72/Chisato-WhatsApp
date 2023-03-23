@@ -4,7 +4,7 @@ import EventEmitter from 'events'
 import TypedEventEmitter from 'typed-emitter'
 import Baileys, { DisconnectReason, fetchLatestBaileysVersion, ParticipantAction, proto } from '@adiwajshing/baileys'
 import P from 'pino'
-import { connect } from 'mongoose'
+import { connect, set } from 'mongoose'
 import { Boom } from '@hapi/boom'
 import qr from 'qr-image'
 import { Utils } from '../lib'
@@ -31,6 +31,7 @@ export class Client extends (EventEmitter as new () => TypedEventEmitter<Events>
         if (!process.env.MONGO_URI) {
             throw new Error('No MongoDB URI provided')
         }
+        set('strictQuery', false)
         await connect(process.env.MONGO_URI)
         this.log('Connected to the Database')
         const { useDatabaseAuth } = new AuthenticationFromDatabase(this.config.session)
