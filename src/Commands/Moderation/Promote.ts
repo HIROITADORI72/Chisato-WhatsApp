@@ -1,4 +1,6 @@
+import { proto } from '@adiwajshing/baileys
 import { BaseCommand, Command, Message } from '../../Structures'
+import { IArgs, GroupFeatures } from '../../Types'
 
 @Command('promote', {
 
