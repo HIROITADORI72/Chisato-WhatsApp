@@ -1,14 +1,16 @@
 import { IContact } from '../Types'
-import { Contact as contact } from '@adiwajshing/baileys'
+import { Contact as contact } from '@whiskeysockets/baileys'
 import { Database, Client } from '.'
 
 export class Contact {
     constructor(private client: Client) {}
+
     public saveContacts = async (contacts: Partial<contact>[]): Promise<void> => {
         if (!this.contacts.has('contacts')) {
             const data = await this.DB.getContacts()
             this.contacts.set('contacts', data)
         }
+
         const data = this.contacts.get('contacts') as contact[]
         for (const contact of contacts) {
             if (contact.id) {
@@ -27,6 +29,7 @@ export class Contact {
                 })
             }
         }
+
         this.contacts.set('contacts', data)
         await this.DB.contact.updateOne({ ID: 'contacts' }, { $set: { data } })
     }
@@ -40,6 +43,7 @@ export class Contact {
                 jid,
                 isMod
             }
+
         const index = contact.findIndex(({ id }) => id === jid)
         if (index < 0)
             return {
@@ -47,6 +51,7 @@ export class Contact {
                 jid,
                 isMod
             }
+
         const { notify, verifiedName, name } = contact[index]
         return {
             username: notify || verifiedName || name || 'User',
@@ -56,6 +61,5 @@ export class Contact {
     }
 
     private DB = new Database()
-
     private contacts = new Map<'contacts', contact[]>()
 }
