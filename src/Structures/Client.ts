@@ -1,8 +1,15 @@
 import chalk from 'chalk'
 import { config as Config } from 'dotenv'
 import EventEmitter from 'events'
-import TypedEventEmitter from 'typed-emitter'
-import Baileys, { DisconnectReason, fetchLatestBaileysVersion, ParticipantAction, proto } from '@adiwajshing/baileys'
+import TypedEmitter from 'typed-emitter'
+import makeWASocket, {
+    DisconnectReason,
+    fetchLatestBaileysVersion,
+    useMultiFileAuthState,
+    makeCacheableSignalKeyStore,
+    proto,
+    ParticipantAction
+} from '@whiskeysockets/baileys'
 import P from 'pino'
 import { connect, set } from 'mongoose'
 import { Boom } from '@hapi/boom'
@@ -11,8 +18,16 @@ import { Utils } from '../lib'
 import { Database, Contact, Message, AuthenticationFromDatabase, Server } from '.'
 import { IConfig, client, IEvent, ICall } from '../Types'
 
-export class Client extends (EventEmitter as new () => TypedEventEmitter<Events>) {
-    private client!: client
+type Events = {
+    new_call: (call: { from: string }) => void
+    new_message: (M: Message) => void
+    participants_update: (event: IEvent) => void
+    new_group_joined: (group: { jid: string; subject: string }) => void
+}
+
+export class Client extends (EventEmitter as new () => TypedEmitter<Events>) {
+    private client!: ReturnType<typeof makeWASocket>
+
     constructor() {
         super()
         Config()
@@ -27,44 +42,70 @@ export class Client extends (EventEmitter as new () => TypedEventEmitter<Events>
         new Server(this)
     }
 
-    public start = async (): Promise<client> => {
-        if (!process.env.MONGO_URI) {
-            throw new Error('No MongoDB URI provided')
-        }
+    public start = async (): Promise<typeof this.client> => {
+        if (!process.env.MONGO_URI) throw new Error('No MongoDB URI provided')
+
         set('strictQuery', false)
         await connect(process.env.MONGO_URI)
         this.log('Connected to the Database')
-        const { useDatabaseAuth } = new AuthenticationFromDatabase(this.config.session)
-        const { saveState, state, clearState } = await useDatabaseAuth()
+
+        const { state, saveCreds, clear } = await useMultiFileAuthState(`./session/${this.config.session}`)
         const { version } = await fetchLatestBaileysVersion()
-        this.client = Baileys({
+
+        this.client = makeWASocket({
             version,
             printQRInTerminal: true,
-            auth: state,
-            logger: P({ level: 'fatal' }),
-            browser: ['Chisato-WhatsApp', 'fatal', '4.0.0'],
-            getMessage: async (key) => {
-                return {
-                    conversation: ''
-                }
+            browser: ['Chisato-WhatsApp', 'Desktop', '4.0.0'],
+            auth: {
+                creds: state.creds,
+                keys: makeCacheableSignalKeyStore(state.keys, P({ level: 'silent' }))
             },
+            logger: P({ level: 'fatal' }),
+            getMessage: async (key) => ({ conversation: '' }),
             msgRetryCounterMap: {},
             markOnlineOnConnect: false
         })
-        for (const method of Object.keys(this.client))
-            this[method as keyof Client] = this.client[method as keyof client]
-        this.ws.on('CB:call', (call: ICall) => this.emit('new_call', { from: call.content[0].attrs['call-creator'] }))
-        this.ev.on('contacts.update', async (contacts) => await this.contact.saveContacts(contacts))
-        this.ev.on('messages.upsert', async ({ messages }) => {
+
+        this.client.ev.on('creds.update', saveCreds)
+        this.client.ev.on('connection.update', async (update) => {
+            const { connection, lastDisconnect, qr: qrString } = update
+
+            if (qrString) {
+                this.log(`QR generated. You can also auth in http://localhost:${this.config.PORT}`)
+                this.QR = qr.imageSync(qrString)
+            }
+
+            if (connection === 'close') {
+                const shouldReconnect = (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut
+                if (shouldReconnect) {
+                    this.log('Reconnecting...')
+                    setTimeout(() => this.start(), 3000)
+                } else {
+                    this.log('Session ended, clearing auth')
+                    await clear()
+                    setTimeout(() => this.start(), 3000)
+                }
+            } else if (connection === 'open') {
+                this.condition = 'connected'
+                this.log('Connected to WhatsApp')
+            } else if (connection === 'connecting') {
+                this.condition = 'connecting'
+                this.log('Connecting to WhatsApp...')
+            }
+        })
+
+        this.client.ev.on('messages.upsert', async ({ messages }) => {
             const M = new Message(messages[0], this)
-            if (M.type === 'protocolMessage' || M.type === 'senderKeyDistributionMessage') return void null
+            if (['protocolMessage', 'senderKeyDistributionMessage'].includes(M.type)) return
+
             if (M.stubType && M.stubParameters) {
-                const emitParticipantsUpdate = (action: ParticipantAction): boolean =>
+                const emitParticipantsUpdate = (action: ParticipantAction) =>
                     this.emit('participants_update', {
                         jid: M.from,
                         participants: M.stubParameters as string[],
                         action
                     })
+
                 switch (M.stubType) {
                     case proto.WebMessageInfo.StubType.GROUP_CREATE:
                         return void this.emit('new_group_joined', {
@@ -84,133 +125,26 @@ export class Client extends (EventEmitter as new () => TypedEventEmitter<Events>
                         return void emitParticipantsUpdate('promote')
                 }
             }
+
             return void this.emit('new_message', await M.simplify())
         })
-        this.ev.on('connection.update', (update) => {
-            if (update.qr) {
-                this.log(
-                    `QR code generated. Scan it to continue | You can also authenicate in http://localhost:${this.config.PORT}`
-                )
-                this.QR = qr.imageSync(update.qr)
-            }
-            const { connection, lastDisconnect } = update
-            if (connection === 'close') {
-                if ((lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut) {
-                    this.log('Reconnecting...')
-                    setTimeout(() => this.start(), 3000)
-                } else {
-                    this.log('Disconnected.', true)
-                    this.log('Deleting session and restarting')
-                    clearState()
-                    this.log('Session deleted')
-                    this.log('Starting...')
-                    setTimeout(() => this.start(), 3000)
-                }
-            }
-            if (connection === 'connecting') {
-                this.condition = 'connecting'
-                this.log('Connecting to WhatsApp...')
-            }
-            if (connection === 'open') {
-                this.condition = 'connected'
-                this.log('Connected to WhatsApp')
-            }
-        })
-        this.ev.on('creds.update', saveState)
+
+        this.client.ev.on('contacts.update', async (contacts) => await this.contact.saveContacts(contacts))
+        this.client.ev.on('CB:call', (call: ICall) => this.emit('new_call', { from: call.content[0].attrs['call-creator'] }))
+
         return this.client
     }
 
     public utils = new Utils()
-
     public DB = new Database()
-
     public config: IConfig
-
     public contact = new Contact(this)
-
     public correctJid = (jid: string): string => `${jid.split('@')[0].split(':')[0]}@s.whatsapp.net`
-
     public assets = new Map<string, Buffer>()
-
-    public log = (text: string, error: boolean = false): void =>
-        console.log(
-            chalk[error ? 'red' : 'blue'](`[${this.config.name.toUpperCase()}]`),
-            chalk[error ? 'redBright' : 'greenBright'](text)
-        )
-
+    public log = (text: string, error = false): void => console.log(
+        chalk[error ? 'red' : 'blue'](`[${this.config.name.toUpperCase()}]`),
+        chalk[error ? 'redBright' : 'greenBright'](text)
+    )
     public QR!: Buffer
-
     public condition!: 'connected' | 'connecting' | 'logged_out'
-
-    public end!: client['end']
-    public ev!: client['ev']
-    public fetchBlocklist!: client['fetchBlocklist']
-    public fetchPrivacySettings!: client['fetchPrivacySettings']
-    public fetchStatus!: client['fetchStatus']
-    public generateMessageTag!: client['generateMessageTag']
-    public getBusinessProfile!: client['getBusinessProfile']
-    public getCatalog!: client['getCatalog']
-    public getCollections!: client['getCollections']
-    public getOrderDetails!: client['getOrderDetails']
-    public groupAcceptInvite!: client['groupAcceptInvite']
-    public groupAcceptInviteV4!: client['groupAcceptInviteV4']
-    public groupInviteCode!: client['groupInviteCode']
-    public groupLeave!: client['groupLeave']
-    public groupMetadata!: client['groupMetadata']
-    public groupCreate!: client['groupCreate']
-    public groupFetchAllParticipating!: client['groupFetchAllParticipating']
-    public groupGetInviteInfo!: client['groupGetInviteInfo']
-    public groupRevokeInvite!: client['groupRevokeInvite']
-    public groupSettingUpdate!: client['groupSettingUpdate']
-    public groupToggleEphemeral!: client['groupToggleEphemeral']
-    public groupUpdateDescription!: client['groupUpdateDescription']
-    public groupUpdateSubject!: client['groupUpdateSubject']
-    public groupParticipantsUpdate!: client['groupParticipantsUpdate']
-    public logout!: client['logout']
-    public presenceSubscribe!: client['presenceSubscribe']
-    public productDelete!: client['productDelete']
-    public productCreate!: client['productCreate']
-    public productUpdate!: client['productUpdate']
-    public profilePictureUrl!: client['profilePictureUrl']
-    public updateMediaMessage!: client['updateMediaMessage']
-    public query!: client['query']
-    public readMessages!: client['readMessages']
-    public refreshMediaConn!: client['refreshMediaConn']
-    public relayMessage!: client['relayMessage']
-    public resyncAppState!: client['resyncAppState']
-    public resyncMainAppState!: client['resyncMainAppState']
-    public sendMessageAck!: client['sendMessageAck']
-    public sendNode!: client['sendNode']
-    public sendRawMessage!: client['sendRawMessage']
-    public sendRetryRequest!: client['sendRetryRequest']
-    public sendMessage!: client['sendMessage']
-    public sendPresenceUpdate!: client['sendPresenceUpdate']
-    public sendReceipt!: client['sendReceipt']
-    public type!: client['type']
-    public updateBlockStatus!: client['updateBlockStatus']
-    public onUnexpectedError!: client['onUnexpectedError']
-    public onWhatsApp!: client['onWhatsApp']
-    public uploadPreKeys!: client['uploadPreKeys']
-    public updateProfilePicture!: client['updateProfilePicture']
-    public user!: client['user']
-    public ws!: client['ws']
-    public waitForMessage!: client['waitForMessage']
-    public waitForSocketOpen!: client['waitForSocketOpen']
-    public waitForConnectionUpdate!: client['waitForConnectionUpdate']
-    public waUploadToServer!: client['waUploadToServer']
-    public getPrivacyTokens!: client['getPrivacyTokens']
-    public assertSessions!: client['assertSessions']
-    public processingMutex!: client['processingMutex']
-    public appPatch!: client['appPatch']
-    public authState!: client['authState']
-    public upsertMessage!: client['upsertMessage']
-    public updateProfileStatus!: client['updateProfileStatus']
-    public chatModify!: client['chatModify']
-}
-
-type Events = {
-    new_call: (call: { from: string }) => void
-    new_message: (M: Message) => void
-    participants_update: (event: IEvent) => void
-    new_group_joined: (group: { jid: string; subject: string }) => void
 }
