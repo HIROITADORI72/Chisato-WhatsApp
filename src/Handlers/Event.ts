@@ -1,5 +1,5 @@
 import chalk from 'chalk'
-import { delay } from '@adiwajshing/baileys'
+import { delay } from '@whiskeysockets/baileys'
 import { Client } from '../Structures'
 import { IEvent } from '../Types'
 
@@ -11,7 +11,9 @@ export class EventHandler {
             subject: '',
             description: ''
         }
+
         await delay(1500)
+
         await this.client
             .groupMetadata(event.jid)
             .then((res) => {
@@ -22,11 +24,13 @@ export class EventHandler {
                 group.subject = '__'
                 group.description = ''
             })
+
         this.client.log(
             `${chalk.blueBright('EVENT')} ${chalk.green(
                 `${this.client.utils.capitalize(event.action)}[${event.participants.length}]`
-            )} in ${chalk.cyanBright(`$`)}`
+            )} in ${chalk.cyanBright(`${group.subject}`)}`
         )
+
         const { events } = await this.client.DB.getGroup(event.jid)
         if (
             !events ||
@@ -35,7 +39,8 @@ export class EventHandler {
                     `${(this.client.user?.id || '').split('@')[0].split(':')[0]}@s.whatsapp.net`
                 ))
         )
-            return void null
+            return
+
         const text =
             event.action === 'add'
                 ? `- ${group.subject} -\n\n💈 *Group Description:*\n${
@@ -50,6 +55,7 @@ export class EventHandler {
                 : event.action === 'demote'
                 ? `Ara Ara, looks like *@${event.participants[0].split('@')[0]}* got Demoted`
                 : `Congratulations *@${event.participants[0].split('@')[0]}*, you're now an admin`
+
         if (event.action === 'add') {
             let imageUrl: string | undefined
             try {
@@ -60,12 +66,14 @@ export class EventHandler {
             const image = imageUrl
                 ? await this.client.utils.getBuffer(imageUrl)
                 : (this.client.assets.get('404') as Buffer)
+
             return void (await this.client.sendMessage(event.jid, {
-                image: image,
+                image,
                 mentions: event.participants,
                 caption: text
             }))
         }
+
         return void (await this.client.sendMessage(event.jid, {
             text,
             mentions: event.participants
