@@ -1,4 +1,4 @@
-import { downloadContentFromMessage } from '@adiwajshing/baileys'
+import { downloadContentFromMessage } from '@whiskeysockets/baileys'
 
 export interface IArgs {
     context: string
