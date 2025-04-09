@@ -1,4 +1,4 @@
-import { Contact } from '@adiwajshing/baileys'
+import { Contact } from '@whiskeysockets/baileys'
 import {
     userSchema,
     groupSchema,
@@ -94,15 +94,10 @@ export class Database {
     private utils = new Utils()
 
     public user = userSchema
-
     public group = groupSchema
-
     public contact = contactSchema
-
     public session = sessionSchema
-
     public disabledCommands = disabledCommandsSchema
-
     public feature = featureSchema
 }
 
