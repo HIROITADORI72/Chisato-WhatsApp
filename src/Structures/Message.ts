@@ -1,4 +1,4 @@
-import { proto, MessageType, MediaType, AnyMessageContent, downloadContentFromMessage } from '@adiwajshing/baileys'
+import { proto, downloadContentFromMessage, MediaType, WAMessageContent } from '@whiskeysockets/baileys'
 import { Client } from '.'
 import { ISender, DownloadableMessage, IGroup } from '../Types'
 
@@ -20,7 +20,7 @@ export class Message {
             isMod,
             isAdmin: false
         }
-        this.type = (Object.keys(M.message || {})[0] as MessageType) || 'conversation'
+        this.type = Object.keys(M.message || {})[0] || 'conversation'
         if (this.M.pushName) this.sender.username = this.M.pushName
         const supportedMediaType = ['videoMessage', 'imageMessage']
         this.hasSupportedMediaMessage =
@@ -43,18 +43,18 @@ export class Message {
         }
         this.content = getContent()
         this.urls = this.client.utils.extractUrls(this.content)
-        const mentions = (M.message?.[this.type as 'extendedTextMessage']?.contextInfo?.mentionedJid || []).filter(
+        const mentions = (M.message?.[this.type as keyof WAMessageContent]?.contextInfo?.mentionedJid || []).filter(
             (x) => x !== null && x !== undefined
         )
         for (const mentioned of mentions) this.mentioned.push(mentioned)
         let text = this.content
         for (const mentioned of this.mentioned) text = text.replace(mentioned.split('@')[0], '')
         this.numbers = this.client.utils.extractNumbers(text)
-        if (M.message?.[this.type as 'extendedTextMessage']?.contextInfo?.quotedMessage) {
+        if (M.message?.[this.type as keyof WAMessageContent]?.contextInfo?.quotedMessage) {
             const { quotedMessage, participant, stanzaId } =
-                M.message?.[this.type as 'extendedTextMessage']?.contextInfo || {}
+                M.message?.[this.type as keyof WAMessageContent]?.contextInfo || {}
             if (quotedMessage && participant && stanzaId) {
-                const Type = Object.keys(quotedMessage)[0] as MessageType
+                const Type = Object.keys(quotedMessage)[0]
                 const getQuotedContent = (): string => {
                     if (quotedMessage?.buttonsResponseMessage)
                         return quotedMessage?.buttonsResponseMessage?.selectedDisplayText || ''
@@ -76,11 +76,6 @@ export class Message {
                         jid,
                         username,
                         isMod,
-                        isAdmin: false
-                    } || {
-                        username: 'User',
-                        jid: this.client.correctJid(participant),
-                        isMod: this.client.config.mods.includes(this.client.correctJid(participant)),
                         isAdmin: false
                     },
                     content: getQuotedContent(),
@@ -160,7 +155,7 @@ export class Message {
                 sections: options.sections,
                 title: options.title,
                 buttonText: options.buttonText
-            } as unknown as AnyMessageContent,
+            } as any,
             {
                 quoted: this.M
             }
@@ -179,13 +174,13 @@ export class Message {
         })
 
     public downloadMediaMessage = async (message: proto.IMessage): Promise<Buffer> => {
-        let type = Object.keys(message)[0] as MessageType
+        let type = Object.keys(message)[0]
         let msg = message[type as keyof typeof message]
         if (type === 'buttonsMessage' || type === 'viewOnceMessageV2') {
             if (type === 'viewOnceMessageV2') {
                 msg = message.viewOnceMessageV2?.message
-                type = Object.keys(msg || {})[0] as MessageType
-            } else type = Object.keys(msg || {})[1] as MessageType
+                type = Object.keys(msg || {})[0]
+            } else type = Object.keys(msg || {})[1]
             msg = (msg as any)[type]
         }
         const stream = await downloadContentFromMessage(
@@ -204,14 +199,14 @@ export class Message {
     public content: string
     public numbers: number[]
     public hasSupportedMediaMessage: boolean
-    public type: MessageType
+    public type: string
     public message: proto.IWebMessageInfo
     public chat: 'dm' | 'group'
     public mentioned: string[] = []
     public quoted?: {
         content: string
         sender: ISender
-        type: MessageType
+        type: string
         message: proto.IMessage
         hasSupportedMediaMessage: boolean
         key: proto.IMessageKey
