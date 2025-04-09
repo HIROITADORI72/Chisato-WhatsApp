@@ -5,7 +5,7 @@ import {
     AuthenticationCreds,
     SignalDataTypeMap,
     AuthenticationState
-} from '@adiwajshing/baileys'
+} from '@whiskeysockets/baileys'
 import { Database } from '.'
 
 export class AuthenticationFromDatabase {
